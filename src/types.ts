@@ -15,6 +15,14 @@ export type VersionRecord = {
   label: string;
   svg: string;
   note: string;
+  /** Server download token. Null on the SVG demo, which has no PPTX. */
+  pptxFile: string | null;
+};
+
+export type SlideObject = {
+  shapeId: string;
+  sourceRef: string;
+  name: string | null;
 };
 
 export type SlideRecord = {
@@ -26,6 +34,7 @@ export type SlideRecord = {
   versions: VersionRecord[];
   currentVersionId: string;
   evidence: EvidenceRecord[];
+  objects: SlideObject[];
 };
 
 export type Candidate = {
@@ -33,9 +42,16 @@ export type Candidate = {
   svg: string;
   title: string;
   baseVersionId: string;
+  /** Null on the SVG demo, where the only target is the title element. */
+  shapeId: string | null;
 };
 
+export type DeckKind = "svg-demo" | "pptx";
+
 export type DeckModel = {
+  kind: DeckKind;
+  sessionId: string | null;
+  fileName: string | null;
   slides: SlideRecord[];
   candidate: Candidate | null;
 };

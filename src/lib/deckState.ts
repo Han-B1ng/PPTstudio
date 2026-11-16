@@ -38,8 +38,44 @@ export function proposeTitleChange(deck: DeckModel, pageId: string, newTitle: st
     svg,
     title,
     baseVersionId: base.id,
+    shapeId: null,
   };
+  return shell(deck, candidate);
+}
+
+/**
+ * Store a candidate SVG produced by the native text-box replace.
+ * The current slide records stay on the same objects.
+ */
+export function proposeShapeCandidate(
+  deck: DeckModel,
+  pageId: string,
+  shapeId: string,
+  svg: string,
+  newTitle: string,
+): DeckModel {
+  const slide = slideById(deck, pageId);
+  if (!slide.objects.some((item) => item.shapeId === shapeId)) {
+    throw new Error(`这一页没有形状 ${shapeId}`);
+  }
+  const title = newTitle.replace(/\s+/g, " ").trim();
+  if (!title) throw new Error("文字不能为空");
+  const base = currentVersion(slide);
+  const candidate: Candidate = {
+    pageId,
+    svg,
+    title,
+    baseVersionId: base.id,
+    shapeId,
+  };
+  return shell(deck, candidate);
+}
+
+function shell(deck: DeckModel, candidate: Candidate | null): DeckModel {
   return {
+    kind: deck.kind,
+    sessionId: deck.sessionId,
+    fileName: deck.fileName,
     slides: deck.slides,
     candidate,
   };
@@ -48,21 +84,21 @@ export function proposeTitleChange(deck: DeckModel, pageId: string, newTitle: st
 /** Drop the candidate. Current versions are not copied and not modified. */
 export function rejectCandidate(deck: DeckModel): DeckModel {
   if (!deck.candidate) return deck;
-  return {
-    slides: deck.slides,
-    candidate: null,
-  };
+  return shell(deck, null);
 }
 
 /**
  * Promote the candidate to a new version on its own page.
  * The previous version stays in history. Other pages keep the same slide records.
  */
-export function acceptCandidate(deck: DeckModel): DeckModel {
+export function acceptCandidate(deck: DeckModel, pptxFile: string | null = null): DeckModel {
   const candidate = deck.candidate;
   if (!candidate) return deck;
 
   return {
+    kind: deck.kind,
+    sessionId: deck.sessionId,
+    fileName: deck.fileName,
     candidate: null,
     slides: deck.slides.map((slide) => {
       if (slide.id !== candidate.pageId) return slide;
@@ -70,7 +106,10 @@ export function acceptCandidate(deck: DeckModel): DeckModel {
         id: `${slide.id}-v${slide.versions.length + 1}`,
         label: `v${slide.versions.length + 1} · 采纳`,
         svg: candidate.svg,
-        note: `局部修改已采纳。标题改为「${candidate.title}」。只替换了标题文本。`,
+        pptxFile,
+        note: candidate.shapeId
+          ? `局部修改已采纳。形状 ${candidate.shapeId} 的文字改为「${candidate.title}」。只替换了这个文本框。`
+          : `局部修改已采纳。标题改为「${candidate.title}」。只替换了标题文本。`,
       };
       return {
         ...slide,

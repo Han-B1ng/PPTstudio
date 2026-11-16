@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pptx-service": "node --experimental-strip-types server/index.mjs",
+    "prove-pptx": "node --experimental-strip-types scripts/prove-native-roundtrip.mjs",
+    "sample-pptx": "python3 scripts/build_sample_pptx.py samples/xinghe-retail-q3.pptx"
   },
   "dependencies": {
     "react": "^19.2.0",
