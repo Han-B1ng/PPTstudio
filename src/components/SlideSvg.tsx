@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { withHitTargets } from "../lib/replaceShapeText";
+import { sanitizeSvg } from "../lib/sanitizeSvg";
 
 type Halo = { left: number; top: number; width: number; height: number };
 
@@ -14,6 +15,8 @@ type SlideSvgProps = {
   onSelectTitle?: () => void;
   onSelectShape?: (shapeId: string) => void;
   onClearSelection?: () => void;
+  /** Render-only whitelist. Do not feed the result back into export. */
+  sanitize?: boolean;
   testId?: string;
 };
 
@@ -28,15 +31,15 @@ export function SlideSvg({
   onSelectTitle,
   onSelectShape,
   onClearSelection,
+  sanitize = false,
   testId,
 }: SlideSvgProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const [halo, setHalo] = useState<Halo | null>(null);
-  const rendered = useMemo(
-    () =>
-      interactive && interactiveMode === "shape" ? withHitTargets(svg, selectableShapeIds) : svg,
-    [interactive, interactiveMode, selectableShapeIds, svg],
-  );
+  const rendered = useMemo(() => {
+    const safe = sanitize ? sanitizeSvg(svg) : svg;
+    return interactive && interactiveMode === "shape" ? withHitTargets(safe, selectableShapeIds) : safe;
+  }, [interactive, interactiveMode, sanitize, selectableShapeIds, svg]);
   const selected = interactiveMode === "shape" ? Boolean(selectedShapeId) : selectedTitle;
 
   const measure = useCallback(() => {

@@ -76,7 +76,7 @@ export function WorkspaceView() {
       </div>
       <p className="disclaimer">
         {native
-          ? "候选只改选中文本框的文字。采纳时才运行 svg_to_pptx.py --roundtrip。没有调用模型。"
+          ? "候选只改选中文本框的文字。采纳时只改 PPTX 里对应的 a:t，不重写文本框。没有调用模型。"
           : "仅编辑预览，尚未验证交付。SVG 渲染成功不代表 PPTX 合格。"}
       </p>
 
@@ -134,21 +134,21 @@ export function WorkspaceView() {
                   <span>当前版本</span>
                   <strong data-testid="compare-current-title">{currentTitle}</strong>
                 </figcaption>
-                <SlideSvg svg={version.svg} label={`当前版本 ${currentTitle}`} testId="compare-current" />
+                <SlideSvg svg={version.svg} label={`当前版本 ${currentTitle}`} sanitize={native} testId="compare-current" />
               </figure>
               <figure>
                 <figcaption>
                   <span>{native ? "候选 · 确定性替换" : "候选 · 模拟执行"}</span>
                   <strong data-testid="compare-candidate-title">{candidate.title}</strong>
                 </figcaption>
-                <SlideSvg svg={candidate.svg} label={`候选 ${candidate.title}`} testId="compare-candidate" />
+                <SlideSvg svg={candidate.svg} label={`候选 ${candidate.title}`} sanitize={native} testId="compare-candidate" />
               </figure>
             </div>
           ) : (
             <div className="overlay-stage">
-              <SlideSvg svg={version.svg} label={`当前版本 ${currentTitle}`} testId="overlay-current" />
+              <SlideSvg svg={version.svg} label={`当前版本 ${currentTitle}`} sanitize={native} testId="overlay-current" />
               <div className="overlay-candidate">
-                <SlideSvg svg={candidate.svg} label={`候选 ${candidate.title}`} testId="overlay-candidate" />
+                <SlideSvg svg={candidate.svg} label={`候选 ${candidate.title}`} sanitize={native} testId="overlay-candidate" />
               </div>
               <p className="overlay-caption">候选以半透明叠在当前版本上。默认对照仍是并排。</p>
             </div>
@@ -185,6 +185,7 @@ export function WorkspaceView() {
             onSelectTitle={studio.selectTitle}
             onSelectShape={studio.selectShape}
             onClearSelection={studio.clearSelection}
+            sanitize={native}
             testId="slide-stage"
           />
           <p className="stage-hint">

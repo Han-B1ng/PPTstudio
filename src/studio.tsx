@@ -247,7 +247,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       const token = ++request.current;
       setBusy("export");
       setLastError(null);
-      setStatusLine("正在用 PPT-Master svg_to_pptx.py --roundtrip 导出。");
+      setStatusLine("正在把选中文本框的 a:t 写回上一份已采纳的 PPTX。");
       try {
         const result = await acceptShape({
           sessionId: deck.sessionId,
@@ -270,7 +270,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         setLatestPptxFile(result.file);
         pushChat(
           "note",
-          `已采纳第 ${page.page} 页形状 ${candidate.shapeId} 的文字「${result.text}」。${result.summary} 导出使用 PPT-Master svg_to_pptx.py --roundtrip。没有调用模型。原稿仍可在版本里打开。`,
+          `已采纳第 ${page.page} 页形状 ${candidate.shapeId} 的文字「${result.text}」。${result.summary} 预览来自 PPT-Master 导入的 SVG，写回是 OOXML 文本补丁。没有调用模型。原稿仍可在版本里打开。`,
         );
         setStatusLine(result.summary);
         setInspectVersionId(null);

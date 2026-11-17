@@ -58,7 +58,7 @@ export PPT_MASTER_ROOT="$HOME/ppt-master"
 
 服务也会依次查找 `PPT_MASTER_ROOT`、仓库旁的 `../ppt-master`、`/tmp/ppt-master` 和 `$HOME/ppt-master`。
 
-命令行先走通同一条管道，再接到界面上：
+导入和预览仍走 PPT-Master。写回不走 `svg_to_pptx.py`：导出时按页码和形状编号找到源 PPTX 里对应形状的那一个 `<a:t>`，只改这段文字。
 
 ```bash
 python3 "$PPT_MASTER_ROOT/skills/ppt-master/scripts/pptx_to_svg.py" \
@@ -66,18 +66,9 @@ python3 "$PPT_MASTER_ROOT/skills/ppt-master/scripts/pptx_to_svg.py" \
   -o /tmp/xinghe-workspace \
   --inheritance-mode both \
   --roundtrip
-
-# 只改 authoring-svg-flat/slide_02.svg 里
-# id="shape-3" 且 data-pptx-source-ref="slide:3" 的那一段文字
-
-python3 "$PPT_MASTER_ROOT/skills/ppt-master/scripts/svg_to_pptx.py" \
-  /tmp/xinghe-workspace \
-  --roundtrip \
-  --primary-language zh-CN \
-  -o /tmp/xinghe-exported.pptx
 ```
 
-仓库里的 `npm run prove-pptx` 用同一组命令和同一段替换函数跑完，并核对 OOXML。
+`npm run prove-pptx` 会先跑上面的导入，再对样例做 OOXML 文本补丁：第 2 页形状 3 的 `<a:t>` 换成新文字，然后把这段文字改回原句，整页 slide XML 必须与源文件相同。找不到唯一形状，或多段文字，会失败并且不改当前文件。连续两次补丁会叠在上一份成功结果上。
 
 ### 启动服务和前端
 
@@ -92,7 +83,9 @@ npm run pptx-service
 npm run dev
 ```
 
-`pptx-service` 监听 `127.0.0.1:8787`。Vite 把 `/api` 代理到这个端口。导入失败或导出失败时，界面会显示服务返回的原文，不会改成一条笼统的成功。
+`pptx-service` 只监听 `127.0.0.1:8787`，不绑 `0.0.0.0`，也不发跨域头。浏览器通过 Vite 的 `/api` 代理访问。导入失败或导出失败时，界面会显示服务返回的原文，不会改成一条笼统的成功。
+
+从 PPTX 导入的 SVG 在画板缩略图、工作区、候选对照和版本回看里都会先过白名单，再画到页面上。这只影响显示副本。写回用的是原包里的 OOXML，不是这段净化后的 SVG。
 
 ### 样例
 
@@ -111,8 +104,8 @@ npm run dev
 2. 点「样例 PPTX」，或用「导入 PPTX」选择 `samples/xinghe-retail-q3.pptx`。画板出现 3 张缩略图。对话里会写明第 2 页两个同文本文本框的形状编号。这一步没有调用模型。
 3. 打开第 2 页，点击左侧标题。选中框出现，侧栏写「第 2 页」和「选中元素 · 形状 3 · title-left」。
 4. 在「对话」输入「会员复购撑起这一季」，点「局部修改」。左侧当前版本仍是原稿，右侧只有形状 3 变成新文字，形状 4 仍是原句。点「退回」。当前页和画板缩略图都回到原稿，没有导出 PPTX。
-5. 再次点选形状 3，输入「即时达改写了增长结构」，点「局部修改」。确认左侧未改后，点「采纳」。服务这时才运行 `svg_to_pptx.py --roundtrip`。
-6. 采纳后点「下载 PPTX」。第 2 页缩略图只更新被选中的文本框，第 1 页和第 3 页不变。打开「版本」里的「v1 · 原稿」，可以看到采纳前的旧文字，也可以下载原稿 PPTX。
+5. 再次点选形状 3，输入「即时达改写了增长结构」，点「局部修改」。确认左侧未改后，点「采纳」。服务这时才把形状 3 的 `<a:t>` 写进上一份 PPTX。
+6. 采纳后点「下载 PPTX」。第 2 页缩略图只更新被选中的文本框，第 1 页和第 3 页不变。打开「版本」里的「v1 · 原稿」，可以看到采纳前的旧文字，也可以下载原稿 PPTX。再采纳形状 4 的另一段文字时，下载文件里两次修改都在。
 
 并排对照截图：`docs/native-pptx-side-by-side.png`。浏览器采纳后下载的文件：`docs/xinghe-retail-q3-shape3.pptx`。
 
@@ -120,14 +113,10 @@ npm run dev
 
 ### 这一轮核对过的结果
 
-命令行和浏览器都跑过。导出包相对样例：
+写回只改 `<a:t>` 的字符数据。把第 2 页形状 3 的文字改回「会员与即时达拉动增长」之后，整页 `ppt/slides/slide2.xml` 与源文件字节相同，因此 `txBox="1"`、`bodyPr wrap="square"`、自动调整、字体、字号、位置和尺寸都还在。形状 4 在只改形状 3 时不变。第 1 页、第 3 页的 slide XML 和三页的 slide rels，以及 `[Content_Types].xml`，与源包字节相同。
 
-- `ppt/slides/slide1.xml`、`ppt/slides/slide3.xml` 以及三页的 slide rels 字节相同。
-- `ppt/slides/slide2.xml` 里，除形状 3 以外的 `p:sp` 规范化后相同。形状 4 的文字仍是「会员与即时达拉动增长」。
-- 形状 3 保留 `id="3"`、名称 `title-left`、位置 `457200,365760`、尺寸 `5486400×640080`、字号 28pt、加粗和 Microsoft YaHei。文字换成「即时达改写了增长结构」。
-- PPT-Master 会按 SVG 重建这个被改过的文本框：`cNvSpPr` 不再带 `txBox="1"`，`bodyPr` 从 `wrap="square"` 变成 `wrap="none"` 并带上边距。文字仍在 `a:t` 里，python-pptx 能读成文本框段落。
-- `[Content_Types].xml` 只有 XML 声明和属性之间的空格不同，部件清单没有增减。
+连续采纳会基于上一份成功导出的 PPTX。先改形状 3，再改形状 4，下载文件里两处新文字都在。找不到形状，或多段文字，会报错并且不改当前文件。
 
-验证工具是 OOXML 解包比对和 python-pptx 1.0.2。本机没有 PowerPoint，也没有 LibreOffice。**PowerPoint 打开与编辑待人工验收。** LibreOffice 未安装，未验证。
+验证工具是 OOXML 解包比对。本机没有 PowerPoint，也没有 LibreOffice。**PowerPoint 打开与编辑待人工验收。** LibreOffice 未安装，未验证。
 
-`npm ci`、`npm run build`、`npm test` 都在 Node.js v22.23.4、npm 10.9.9 上跑过。`npm test` 为 14 项通过。`npm run prove-pptx` 的导出摘要是 `output_pages=3 passthrough=2 cloned_passthrough=0 patched=0 rebuilt=1`。
+`npm ci`、`npm run build`、`npm test`、`npm run prove-pptx` 都在 Node.js v22.23.4、npm 10.9.9 上跑过。

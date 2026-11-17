@@ -2,10 +2,11 @@
  * Local PPTX round-trip service.
  *
  * Import:  PPT-Master pptx_to_svg.py --roundtrip
- * Preview: deterministic text replace of one shape (page id + shape id)
- * Accept:  PPT-Master svg_to_pptx.py --roundtrip
+ * Preview: deterministic text replace of one shape in the authoring SVG
+ * Accept:  patch that shape's single <a:t> in the last accepted PPTX
  *
- * No model calls. Failures are returned as the process stderr/stdout.
+ * No model calls. The PPTX write-back does not run svg_to_pptx.py.
+ * Failures are returned as the concrete error text.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -16,11 +17,13 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { OoxmlTextError, patchSlideXml, readShapeTextFromSlide, slidePartForPage } from "../src/lib/ooxmlTextPatch.ts";
 import { listTextObjects, replaceShapeText } from "../src/lib/replaceShapeText.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const upstream = JSON.parse(await fs.readFile(path.join(repoRoot, "server/upstream.json"), "utf8"));
 const port = Number(process.env.PORT || 8787);
+const listenHost = "127.0.0.1";
 const python = process.env.PYTHON || "python3";
 const sessionsRoot = path.join(repoRoot, "var/sessions");
 const samplePath = path.join(repoRoot, "samples/xinghe-retail-q3.pptx");
@@ -58,6 +61,24 @@ function fail(message) {
   const error = new Error(message);
   error.statusCode = 500;
   return error;
+}
+
+const zipScript = path.join(repoRoot, "server/pptx_zip.py");
+
+function readZipText(pptxPath, name) {
+  const result = spawnSync(python, [zipScript, "read", pptxPath, name], {
+    encoding: "buffer",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (result.error) throw fail(`${python} 无法启动：${result.error.message}`);
+  if (result.status !== 0) {
+    throw fail((result.stderr || "").toString().trim() || `无法读取 ${name}`);
+  }
+  return result.stdout.toString("utf8");
+}
+
+function replaceZipEntry(src, dst, name, payloadPath) {
+  run(python, [zipScript, "replace", src, dst, name, payloadPath]);
 }
 
 function run(command, args, options = {}) {
@@ -172,6 +193,7 @@ async function importPackage(bytes, fileName) {
   await fs.mkdir(path.join(dir, "exports"), { recursive: true });
   const sourcePath = path.join(dir, "source.pptx");
   await fs.writeFile(sourcePath, bytes);
+  await fs.copyFile(sourcePath, path.join(dir, "current.pptx"));
   const importer = path.join(root, "skills/ppt-master/scripts/pptx_to_svg.py");
   try {
     run(python, [
@@ -286,18 +308,14 @@ async function preview(sessionId, body) {
 }
 
 async function accept(sessionId, body) {
-  const root = pptMasterRoot();
-  if (!root) {
-    throw fail("找不到 PPT-Master，无法导出。");
-  }
   const dir = sessionDir(sessionId);
   const manifest = await readManifest(sessionId);
   const workspace = path.join(dir, "workspace");
   const svgPath = slideSvgPath(workspace, body.page);
-  const current = await fs.readFile(svgPath, "utf8");
+  const currentSvg = await fs.readFile(svgPath, "utf8");
   let replaced;
   try {
-    replaced = replaceShapeText(current, String(body.shapeId), String(body.text ?? ""));
+    replaced = replaceShapeText(currentSvg, String(body.shapeId), String(body.text ?? ""));
   } catch (error) {
     const wrapped = new Error(error instanceof Error ? error.message : "无法替换文字");
     wrapped.statusCode = 400;
@@ -310,42 +328,65 @@ async function accept(sessionId, body) {
     mismatch.statusCode = 409;
     throw mismatch;
   }
+  const currentPptx = path.join(dir, "current.pptx");
+  const basePptx = existsSync(currentPptx) ? currentPptx : path.join(dir, "source.pptx");
+  const presentationXml = readZipText(basePptx, "ppt/presentation.xml");
+  const relsXml = readZipText(basePptx, "ppt/_rels/presentation.xml.rels");
+  let part;
+  let patched;
+  try {
+    part = slidePartForPage(presentationXml, relsXml, Number(body.page));
+    const slideXml = readZipText(basePptx, part);
+    const officeText = readShapeTextFromSlide(slideXml, String(body.shapeId));
+    if (officeText !== replaced.previousText) {
+      const mismatch = new Error(
+        `第 ${body.page} 页形状 ${body.shapeId} 的 PPTX 文字是「${officeText}」，预览里是「${replaced.previousText}」。没有导出。`,
+      );
+      mismatch.statusCode = 409;
+      throw mismatch;
+    }
+    patched = patchSlideXml(slideXml, String(body.shapeId), replaced.text);
+  } catch (error) {
+    if (error && error.statusCode) throw error;
+    const message = error instanceof Error ? error.message : "无法写入 PPTX";
+    const wrapped = new Error(message);
+    wrapped.statusCode = error instanceof OoxmlTextError ? 400 : 500;
+    throw wrapped;
+  }
   const exportIndex = manifest.exports.length + 1;
   const exportFile = `export-${exportIndex}`;
   const exportPath = path.join(dir, "exports", `${exportFile}.pptx`);
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "pptstudio-"));
+  const payloadPath = path.join(temp, "slide.xml");
+  const tempPptx = path.join(temp, "patched.pptx");
+  const backupPptx = path.join(temp, "backup.pptx");
+  await fs.copyFile(basePptx, backupPptx);
+  let mutated = false;
   try {
-    await fs.cp(workspace, temp, { recursive: true });
-    const tempSvg = slideSvgPath(temp, body.page);
-    await fs.writeFile(tempSvg, replaced.svg);
-    const exporter = path.join(root, "skills/ppt-master/scripts/svg_to_pptx.py");
-    const stdout = run(python, [
-      exporter,
-      temp,
-      "--roundtrip",
-      "--primary-language",
-      "zh-CN",
-      "-o",
-      exportPath,
-    ]);
+    await fs.writeFile(payloadPath, patched.xml);
+    replaceZipEntry(basePptx, tempPptx, part, payloadPath);
+    mutated = true;
+    await fs.copyFile(tempPptx, exportPath);
+    await fs.copyFile(tempPptx, currentPptx);
     await fs.writeFile(svgPath, replaced.svg);
     manifest.exports.push(exportFile);
     await writeManifest(sessionId, manifest);
-    const summaryLine = stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.startsWith("Round-trip export summary:"));
+    const root = pptMasterRoot();
     return {
       file: exportFile,
       svg: replaced.svg,
-      text: replaced.text,
-      previousText: replaced.previousText,
+      text: patched.text,
+      previousText: patched.previousText,
       shapeId: replaced.shapeId,
       page: Number(body.page),
-      summary: summaryLine || stdout.trim(),
-      upstreamCommit: gitSha(root),
+      summary: `OOXML 只替换了第 ${body.page} 页形状 ${replaced.shapeId} 的 a:t。文本框结构没有重写。`,
+      upstreamCommit: root ? gitSha(root) : null,
     };
   } catch (error) {
+    if (mutated) {
+      await fs.copyFile(backupPptx, currentPptx);
+      await fs.writeFile(svgPath, currentSvg);
+    }
     await fs.rm(exportPath, { force: true });
     throw error;
   } finally {
@@ -358,7 +399,6 @@ function sendJson(response, status, body) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
-    "access-control-allow-origin": "*",
   });
   response.end(payload);
 }
@@ -371,16 +411,6 @@ function sendError(response, error) {
 
 async function handle(request, response) {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
-  if (request.method === "OPTIONS") {
-    response.writeHead(204, {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,OPTIONS",
-      "access-control-allow-headers": "content-type,x-filename",
-    });
-    response.end();
-    return;
-  }
-
   if (request.method === "GET" && url.pathname === "/api/health") {
     const root = pptMasterRoot();
     const sha = root ? gitSha(root) : null;
@@ -474,9 +504,9 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.listen(port, "0.0.0.0", () => {
+server.listen(port, listenHost, () => {
   const root = pptMasterRoot();
-  console.log(`pptx service http://127.0.0.1:${port}`);
+  console.log(`pptx service listening on http://${listenHost}:${port}`);
   console.log(`PPT_MASTER_ROOT=${root || "(missing)"}`);
   if (root) console.log(`commit ${gitSha(root)} pinned ${upstream.commit}`);
 });

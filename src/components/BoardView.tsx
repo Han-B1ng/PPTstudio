@@ -33,7 +33,12 @@ export function BoardView() {
                 data-testid={`thumb-${slide.page}`}
                 onClick={() => studio.openPage(slide.id)}
               >
-                <SlideSvg svg={svg} label={`第 ${slide.page} 页 ${title}`} testId={`thumb-svg-${slide.page}`} />
+                <SlideSvg
+                  svg={svg}
+                  label={`第 ${slide.page} 页 ${title}`}
+                  sanitize={studio.deck.kind === "pptx"}
+                  testId={`thumb-svg-${slide.page}`}
+                />
                 <span className="thumb-caption">
                   <span className="thumb-title" data-testid={`thumb-title-${slide.page}`}>
                     {title}
