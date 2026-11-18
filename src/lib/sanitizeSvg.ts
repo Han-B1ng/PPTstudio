@@ -33,13 +33,63 @@ export function isAllowedImageReference(value: string): boolean {
   return SAFE_MEDIA_PATH.test(path);
 }
 
-function isLocalUrl(value: string): boolean {
+const COLOR =
+  "(?:none|transparent|currentcolor|#[0-9a-f]{3,8}|(?:rgb|rgba)\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}(?:\\s*,\\s*(?:0|1|0?\\.\\d+))?\\s*\\))";
+const LENGTH = "-?\\d+(?:\\.\\d+)?(?:px|em|%|pt)?";
+const FRAGMENT_URL = "url\\(\\s*['\"]?#[A-Za-z_][\\w:.-]*['\"]?\\s*\\)";
+const OPACITY = "(?:0|1|0?\\.\\d+|\\d{1,3}%)";
+
+/** Every declaration must match. Anything else drops the whole style attribute. */
+const STYLE_VALUE: Record<string, RegExp> = {
+  fill: new RegExp(`^(?:${COLOR}|${FRAGMENT_URL})$`, "i"),
+  stroke: new RegExp(`^(?:${COLOR}|${FRAGMENT_URL})$`, "i"),
+  color: new RegExp(`^${COLOR}$`, "i"),
+  "stop-color": new RegExp(`^${COLOR}$`, "i"),
+  "fill-opacity": new RegExp(`^${OPACITY}$`),
+  "stroke-opacity": new RegExp(`^${OPACITY}$`),
+  "stop-opacity": new RegExp(`^${OPACITY}$`),
+  opacity: new RegExp(`^${OPACITY}$`),
+  "stroke-width": new RegExp(`^${LENGTH}$`),
+  "stroke-linecap": /^(?:butt|round|square)$/,
+  "stroke-linejoin": /^(?:miter|round|bevel)$/,
+  "stroke-dasharray": new RegExp(`^(?:none|(?:${LENGTH}\\s*,?\\s*)+)$`),
+  "font-size": new RegExp(`^${LENGTH}$`),
+  "font-weight": /^(?:normal|bold|[1-9]00)$/,
+  "font-style": /^(?:normal|italic)$/,
+  "font-family": /^[A-Za-z0-9"'\s,._-]{1,80}$/,
+  "text-anchor": /^(?:start|middle|end)$/,
+  "text-decoration": /^(?:none|underline|line-through)$/,
+  "letter-spacing": new RegExp(`^(?:normal|${LENGTH})$`),
+  visibility: /^(?:visible|hidden)$/,
+  display: /^(?:inline|block|none)$/,
+  "clip-path": new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+  mask: new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+  filter: new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+};
+
+function paintValueIsAllowed(value: string): boolean {
   URL_FUNCTION.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = URL_FUNCTION.exec(value))) {
-    if (!SAFE_FRAGMENT.test((match[2] ?? "").trim())) return false;
+    if (!SAFE_FRAGMENT.test((match[2] ?? "").trim().replace(/^['"]|['"]$/g, ""))) return false;
   }
   return !/expression\s*\(|javascript\s*:|@import|behavior\s*:|-moz-binding|<\/|[{}]/i.test(value);
+}
+
+function styleIsAllowlisted(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 400 || /[{}<>\\]|\/\*|\*\//.test(trimmed)) return false;
+  const declarations = trimmed.split(";").map((part) => part.trim()).filter(Boolean);
+  if (declarations.length === 0) return false;
+  for (const declaration of declarations) {
+    const match = /^([a-z-]+)\s*:\s*(.+)$/i.exec(declaration);
+    if (!match) return false;
+    const property = match[1].toLowerCase();
+    const propertyValue = match[2].trim();
+    const rule = STYLE_VALUE[property];
+    if (!rule || !rule.test(propertyValue)) return false;
+  }
+  return true;
 }
 
 function isAllowedReference(element: string, value: string): boolean {
@@ -62,8 +112,12 @@ function installHooks(): void {
       if (!isAllowedReference(element, data.attrValue)) data.keepAttr = false;
       return;
     }
-    if (name === "style" || name === "fill" || name === "stroke" || name === "clip-path" || name === "mask" || name === "filter") {
-      if (!isLocalUrl(data.attrValue)) data.keepAttr = false;
+    if (name === "style") {
+      if (!styleIsAllowlisted(data.attrValue)) data.keepAttr = false;
+      return;
+    }
+    if (name === "fill" || name === "stroke" || name === "clip-path" || name === "mask" || name === "filter") {
+      if (!paintValueIsAllowed(data.attrValue)) data.keepAttr = false;
     }
   });
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {

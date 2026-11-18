@@ -15,7 +15,10 @@ const ATTACK = `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
     </linearGradient>
   </defs>
   <g id="shape-3" data-pptx-object="shape" data-pptx-source-ref="slide:3" onclick="steal()" data-pptx-frame="48 38.4 576 67.2">
-    <rect width="120" height="40" fill="url(#g1)" style="fill:url(https://evil.example/p.png)"/>
+    <rect width="120" height="40" fill="url(#g1)" style="fill:#112233;opacity:0.5"/>
+    <rect id="mixed" style="fill:#fff;position:absolute"/>
+    <rect id="unknown" style="not-a-property:1"/>
+    <rect id="external-style" style="fill:url(https://evil.example/p.png)"/>
     <image href="https://evil.example/pixel.png"/>
     <image href="../images/../secret.png"/>
     <image href="../images/image1.png"/>
@@ -45,6 +48,7 @@ describe("sanitizeSvg", () => {
     expect(richDoc.querySelector("rect")?.getAttribute("fill")).toBe("url(#g1)");
     const images = [...richDoc.querySelectorAll("image")].map((node) => node.getAttribute("href"));
     expect(images).toEqual(["../images/image1.png", "data:image/png;base64,iVBORw0KGgo="]);
+    expect(richDoc.querySelector("rect")?.getAttribute("style")).toBe("fill:#112233;opacity:0.5");
   });
 
   it("strips active content, external resources, traversal paths, and unsafe styles", () => {
@@ -63,6 +67,12 @@ describe("sanitizeSvg", () => {
     expect(safe).not.toContain("@import");
     expect(safe).not.toContain("secret.png");
     expect(safe).not.toContain("svg+xml");
+    expect(safe).not.toContain("position");
+    expect(safe).not.toContain("not-a-property");
+    const doc = new DOMParser().parseFromString(safe, "image/svg+xml");
+    expect(doc.getElementById("mixed")?.getAttribute("style")).toBeNull();
+    expect(doc.getElementById("unknown")?.getAttribute("style")).toBeNull();
+    expect(doc.getElementById("external-style")?.getAttribute("style")).toBeNull();
     expect(isAllowedImageReference("../images/../../etc/passwd.png")).toBe(false);
     expect(isAllowedImageReference("https://evil.example/a.png")).toBe(false);
     expect(isAllowedImageReference("../images/image1.png")).toBe(true);
