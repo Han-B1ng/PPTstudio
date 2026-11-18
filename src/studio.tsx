@@ -185,10 +185,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         return;
       }
       const previousText = readShapeText(currentVersion(page).svg, shape.shapeId);
-      if (!previousText) {
-        setStatusLine(`形状 ${shape.shapeId} 没有单段文字，本轮不能替换。`);
-        return;
-      }
       const title = titleDraft.replace(/\s+/g, " ").trim();
       if (!title) {
         setStatusLine("请输入新的文字。");
@@ -207,7 +203,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
           page: page.page,
           shapeId: shape.shapeId,
           text: title,
-          previousText,
+          previousText: previousText ?? "",
         });
         if (token !== request.current) return;
         setDeck(proposeShapeCandidate(deck, page.id, shape.shapeId, result.svg, result.text));

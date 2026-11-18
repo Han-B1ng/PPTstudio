@@ -275,9 +275,47 @@ function readBody(request) {
   });
 }
 
+function currentPptxPath(dir) {
+  const current = path.join(dir, "current.pptx");
+  return existsSync(current) ? current : path.join(dir, "source.pptx");
+}
+
+/**
+ * Locate one single-run <a:t> in the last accepted PPTX.
+ * Throws before any file is written when the shape is missing, duplicated,
+ * or still multi-paragraph.
+ */
+function readWritableOfficeText(basePptx, page, shapeId) {
+  const presentationXml = readZipText(basePptx, "ppt/presentation.xml");
+  const relsXml = readZipText(basePptx, "ppt/_rels/presentation.xml.rels");
+  try {
+    const part = slidePartForPage(presentationXml, relsXml, Number(page));
+    const slideXml = readZipText(basePptx, part);
+    const officeText = readShapeTextFromSlide(slideXml, String(shapeId));
+    return { part, slideXml, officeText };
+  } catch (error) {
+    if (error && error.statusCode) throw error;
+    const message = error instanceof Error ? error.message : "无法核对 PPTX 文字";
+    const wrapped = new Error(message);
+    wrapped.statusCode = error instanceof OoxmlTextError ? 400 : 500;
+    throw wrapped;
+  }
+}
+
+function assertOfficeTextMatches(officeText, previousText, page, shapeId) {
+  if (previousText != null && previousText !== "" && officeText !== previousText) {
+    const mismatch = new Error(
+      `第 ${page} 页形状 ${shapeId} 的 PPTX 文字是「${officeText}」，预览里是「${previousText}」。当前版本没有改。`,
+    );
+    mismatch.statusCode = 409;
+    throw mismatch;
+  }
+}
+
 async function preview(sessionId, body) {
   const manifest = await readManifest(sessionId);
-  const svgPath = slideSvgPath(path.join(sessionDir(sessionId), "workspace"), body.page);
+  const dir = sessionDir(sessionId);
+  const svgPath = slideSvgPath(path.join(dir, "workspace"), body.page);
   let svg;
   try {
     svg = await fs.readFile(svgPath, "utf8");
@@ -289,6 +327,8 @@ async function preview(sessionId, body) {
     }
     throw error;
   }
+  const office = readWritableOfficeText(currentPptxPath(dir), body.page, body.shapeId);
+  assertOfficeTextMatches(office.officeText, body.previousText, body.page, body.shapeId);
   let replaced;
   try {
     replaced = replaceShapeText(svg, String(body.shapeId), String(body.text ?? ""));
@@ -297,9 +337,9 @@ async function preview(sessionId, body) {
     wrapped.statusCode = 400;
     throw wrapped;
   }
-  if (body.previousText != null && replaced.previousText !== body.previousText) {
+  if (replaced.previousText !== office.officeText) {
     const mismatch = new Error(
-      `形状 ${replaced.shapeId} 当前文字是「${replaced.previousText}」，不是「${body.previousText}」。没有写入。`,
+      `第 ${body.page} 页形状 ${body.shapeId} 的 SVG 文字是「${replaced.previousText}」，PPTX 里是「${office.officeText}」。没有生成候选。`,
     );
     mismatch.statusCode = 409;
     throw mismatch;
@@ -328,31 +368,18 @@ async function accept(sessionId, body) {
     mismatch.statusCode = 409;
     throw mismatch;
   }
-  const currentPptx = path.join(dir, "current.pptx");
-  const basePptx = existsSync(currentPptx) ? currentPptx : path.join(dir, "source.pptx");
-  const presentationXml = readZipText(basePptx, "ppt/presentation.xml");
-  const relsXml = readZipText(basePptx, "ppt/_rels/presentation.xml.rels");
-  let part;
-  let patched;
-  try {
-    part = slidePartForPage(presentationXml, relsXml, Number(body.page));
-    const slideXml = readZipText(basePptx, part);
-    const officeText = readShapeTextFromSlide(slideXml, String(body.shapeId));
-    if (officeText !== replaced.previousText) {
-      const mismatch = new Error(
-        `第 ${body.page} 页形状 ${body.shapeId} 的 PPTX 文字是「${officeText}」，预览里是「${replaced.previousText}」。没有导出。`,
-      );
-      mismatch.statusCode = 409;
-      throw mismatch;
-    }
-    patched = patchSlideXml(slideXml, String(body.shapeId), replaced.text);
-  } catch (error) {
-    if (error && error.statusCode) throw error;
-    const message = error instanceof Error ? error.message : "无法写入 PPTX";
-    const wrapped = new Error(message);
-    wrapped.statusCode = error instanceof OoxmlTextError ? 400 : 500;
-    throw wrapped;
+  const acceptedPptx = path.join(dir, "current.pptx");
+  const basePptx = currentPptxPath(dir);
+  const office = readWritableOfficeText(basePptx, body.page, body.shapeId);
+  if (office.officeText !== replaced.previousText) {
+    const mismatch = new Error(
+      `第 ${body.page} 页形状 ${body.shapeId} 的 PPTX 文字是「${office.officeText}」，预览里是「${replaced.previousText}」。没有导出。`,
+    );
+    mismatch.statusCode = 409;
+    throw mismatch;
   }
+  const part = office.part;
+  const patched = patchSlideXml(office.slideXml, String(body.shapeId), replaced.text);
   const exportIndex = manifest.exports.length + 1;
   const exportFile = `export-${exportIndex}`;
   const exportPath = path.join(dir, "exports", `${exportFile}.pptx`);
@@ -367,7 +394,7 @@ async function accept(sessionId, body) {
     replaceZipEntry(basePptx, tempPptx, part, payloadPath);
     mutated = true;
     await fs.copyFile(tempPptx, exportPath);
-    await fs.copyFile(tempPptx, currentPptx);
+    await fs.copyFile(tempPptx, acceptedPptx);
     await fs.writeFile(svgPath, replaced.svg);
     manifest.exports.push(exportFile);
     await writeManifest(sessionId, manifest);
@@ -384,7 +411,7 @@ async function accept(sessionId, body) {
     };
   } catch (error) {
     if (mutated) {
-      await fs.copyFile(backupPptx, currentPptx);
+      await fs.copyFile(backupPptx, acceptedPptx);
       await fs.writeFile(svgPath, currentSvg);
     }
     await fs.rm(exportPath, { force: true });

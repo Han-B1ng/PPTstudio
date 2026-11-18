@@ -172,10 +172,23 @@ export function readShapeText(svg: string, shapeId: string): string | null {
   return unescapeXmlText(raw);
 }
 
+function visibleShapeText(svg: string, shapeId: string): string | null {
+  let read: ReturnType<typeof readSlots>;
+  try {
+    read = readSlots(svg, shapeId);
+  } catch (error) {
+    if (error instanceof ShapeTextError && error.message.includes("没有")) return null;
+    throw error;
+  }
+  const filled = filledSlots(read.slots).filter((slot) => !slot.raw.includes("&#"));
+  if (filled.length === 0) return null;
+  return filled.map((slot) => unescapeXmlText(slot.raw)).join("\n");
+}
+
 export function listTextObjects(svg: string): SlideObject[] {
   const objects: SlideObject[] = [];
   for (const span of groupSpans(svg)) {
-    const text = readShapeText(svg, span.shapeId);
+    const text = visibleShapeText(svg, span.shapeId);
     if (!text) continue;
     objects.push({
       shapeId: span.shapeId,

@@ -1,268 +1,102 @@
 /**
- * Whitelist sanitizer for PPTX preview SVG.
+ * Render-only SVG sanitizer.
  *
- * This is a render copy only. Export still uses the authoring SVG and the
- * OOXML text patch, never this string.
+ * DOMPurify parses the markup. Hooks then reject resource URLs and style
+ * values this preview does not need. Export and OOXML write-back never use
+ * the returned string.
  */
 
-const ALLOWED_ELEMENTS = new Set([
-  "svg",
-  "g",
-  "rect",
-  "path",
-  "circle",
-  "ellipse",
-  "line",
-  "polyline",
-  "polygon",
-  "text",
-  "tspan",
-  "textpath",
-  "image",
-  "use",
-  "defs",
-  "clippath",
-  "mask",
-  "lineargradient",
-  "radialgradient",
-  "stop",
-  "pattern",
-  "title",
-  "desc",
-  "symbol",
-  "marker",
-  "switch",
-  "a",
-]);
+import DOMPurify from "dompurify";
 
-const ALLOWED_ATTRS = new Set([
-  "id",
-  "class",
-  "style",
-  "lang",
-  "x",
-  "y",
-  "x1",
-  "y1",
-  "x2",
-  "y2",
-  "cx",
-  "cy",
-  "r",
-  "rx",
-  "ry",
-  "fx",
-  "fy",
-  "fr",
-  "width",
-  "height",
-  "d",
-  "points",
-  "viewbox",
-  "preserveaspectratio",
-  "transform",
-  "fill",
-  "stroke",
-  "stroke-width",
-  "stroke-linecap",
-  "stroke-linejoin",
-  "stroke-miterlimit",
-  "stroke-dasharray",
-  "stroke-dashoffset",
-  "stroke-opacity",
-  "fill-opacity",
-  "fill-rule",
-  "opacity",
-  "color",
-  "font-family",
-  "font-size",
-  "font-weight",
-  "font-style",
-  "font-variant",
-  "text-anchor",
-  "text-decoration",
-  "letter-spacing",
-  "word-spacing",
-  "dominant-baseline",
-  "alignment-baseline",
-  "baseline-shift",
-  "clip-path",
-  "clip-rule",
-  "mask",
-  "marker-start",
-  "marker-mid",
-  "marker-end",
-  "offset",
-  "stop-color",
-  "stop-opacity",
-  "gradientunits",
-  "gradienttransform",
-  "spreadmethod",
-  "patternunits",
-  "patterncontentunits",
-  "patterntransform",
-  "visibility",
-  "display",
-  "overflow",
-  "pointer-events",
-  "version",
-  "xmlns",
-  "xml:space",
-  "xml:lang",
-  "href",
-  "xlink:href",
-  "data-element",
-  "data-shape-id",
-  "data-name",
-]);
+const SAFE_IMAGE_DATA = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i;
+const SAFE_MEDIA_PATH = /^(?:\.\.\/)?images\/[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:png|jpe?g|gif|webp)$/;
+const SAFE_FRAGMENT = /^#[A-Za-z_][\w:.-]*$/;
+const URL_FUNCTION = /url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/gi;
 
-const URL_ATTRS = new Set(["href", "xlink:href"]);
-const RESOURCE_ELEMENTS = new Set(["image", "use"]);
+let hooksInstalled = false;
 
-function localName(name: string): string {
-  const index = name.lastIndexOf(":");
-  return (index === -1 ? name : name.slice(index + 1)).toLowerCase();
-}
-
-function isAllowedAttr(element: string, rawName: string): boolean {
-  const name = rawName.toLowerCase();
-  if (name.startsWith("on")) return false;
-  if (name.startsWith("data-pptx-")) return true;
-  if (name.startsWith("xmlns:") || name === "xmlns") return true;
-  if (!ALLOWED_ATTRS.has(name) && !ALLOWED_ATTRS.has(localName(rawName))) return false;
-  if (URL_ATTRS.has(name) || URL_ATTRS.has(localName(rawName))) {
-    return element === "a" || RESOURCE_ELEMENTS.has(element);
+function decodedPath(value: string): string | null {
+  try {
+    return decodeURIComponent(value).replaceAll("\\", "/");
+  } catch {
+    return null;
   }
-  return true;
 }
 
-function attrValue(raw: string): string {
-  const quoted = /\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))\s*$/.exec(raw);
-  const value = quoted?.[1] ?? quoted?.[2] ?? quoted?.[3] ?? "";
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
+/** Raster images from a PPT-Master media folder, or an inline raster data URI. */
+export function isAllowedImageReference(value: string): boolean {
+  const compact = value.trim().replace(/\s+/g, "");
+  if (SAFE_IMAGE_DATA.test(compact)) return true;
+  const path = decodedPath(value.trim());
+  if (!path || path !== value.trim() || path.includes("..") && !path.startsWith("../images/")) return false;
+  if (path.slice("../images/".length).includes("..")) return false;
+  return SAFE_MEDIA_PATH.test(path);
 }
 
-function compactUrl(value: string): string {
-  return value.trim().replace(/[\u0000-\u0020]+/g, "").toLowerCase();
-}
-
-function isSafeResource(value: string): boolean {
-  const url = compactUrl(value);
-  if (!url || url.startsWith("#")) return true;
-  if (url.startsWith("//") || url.startsWith("\\\\") || url.includes("\\")) return false;
-  if (url.startsWith("javascript:") || url.startsWith("vbscript:") || url.startsWith("file:") || url.startsWith("blob:")) {
-    return false;
-  }
-  if (url.startsWith("http:") || url.startsWith("https:")) return false;
-  if (url.startsWith("data:")) {
-    return /^data:image\/(png|jpeg|jpg|gif|webp)[;,]/i.test(url);
-  }
-  return !url.includes(":");
-}
-
-function functionalUrlsAreSafe(value: string): boolean {
-  const pattern = /url\s*\(\s*(['"]?)([\s\S]*?)\1\s*\)/gi;
+function isLocalUrl(value: string): boolean {
+  URL_FUNCTION.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = pattern.exec(value))) {
-    const target = (match[2] ?? "").trim();
-    if (!target.startsWith("#")) return false;
+  while ((match = URL_FUNCTION.exec(value))) {
+    if (!SAFE_FRAGMENT.test((match[2] ?? "").trim())) return false;
   }
-  return !/expression\s*\(|javascript:|@import|behavior\s*:|-moz-binding/i.test(value);
+  return !/expression\s*\(|javascript\s*:|@import|behavior\s*:|-moz-binding|<\/|[{}]/i.test(value);
 }
 
-function attributeIsSafe(element: string, rawName: string, rawAttr: string): boolean {
-  const name = localName(rawName);
-  const value = attrValue(rawAttr);
-  if (name === "style" || name === "fill" || name === "stroke" || name === "clip-path" || name === "mask") {
-    if (!functionalUrlsAreSafe(value)) return false;
-  }
-  if (URL_ATTRS.has(rawName.toLowerCase()) || URL_ATTRS.has(name)) {
-    if (element === "a") return value.trim() === "" || value.trim().startsWith("#");
-    return isSafeResource(value);
-  }
-  return true;
+function isAllowedReference(element: string, value: string): boolean {
+  const trimmed = value.trim();
+  if (element === "image") return isAllowedImageReference(trimmed);
+  return SAFE_FRAGMENT.test(trimmed);
 }
 
-function parseAttributes(source: string): { raw: string; name: string }[] {
-  const attrs: { raw: string; name: string }[] = [];
-  const pattern = /([^\s="'<>/]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    const raw = match[0];
-    if (raw === "/") continue;
-    attrs.push({ raw, name: match[1] ?? "" });
-  }
-  return attrs;
-}
-
-function rebuildTag(name: string, attrs: { raw: string }[], selfClosing: boolean): string {
-  const body = attrs.map((attr) => attr.raw).join(" ");
-  const gap = body ? ` ${body}` : "";
-  return selfClosing ? `<${name}${gap}/>` : `<${name}${gap}>`;
+function installHooks(): void {
+  if (hooksInstalled || !DOMPurify.isSupported) return;
+  hooksInstalled = true;
+  DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+    const name = data.attrName.toLowerCase();
+    const element = node.nodeName.toLowerCase();
+    if (name.startsWith("on")) {
+      data.keepAttr = false;
+      return;
+    }
+    if (name === "href" || name === "xlink:href") {
+      if (!isAllowedReference(element, data.attrValue)) data.keepAttr = false;
+      return;
+    }
+    if (name === "style" || name === "fill" || name === "stroke" || name === "clip-path" || name === "mask" || name === "filter") {
+      if (!isLocalUrl(data.attrValue)) data.keepAttr = false;
+    }
+  });
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.nodeType !== 1) return;
+    const element = node.nodeName.toLowerCase();
+    if (element !== "image" && element !== "use") return;
+    const href = (node as Element).getAttribute("href") || (node as Element).getAttribute("xlink:href");
+    if (!href) node.parentNode?.removeChild(node);
+  });
 }
 
 export function sanitizeSvg(input: string): string {
-  const pattern = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[\s\S]*?>|<\/?[^>]+>/g;
-  let cursor = 0;
-  let output = "";
-  const skip: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(input))) {
-    if (skip.length === 0) output += input.slice(cursor, match.index);
-    cursor = match.index + match[0].length;
-    const token = match[0];
-    if (
-      token.startsWith("<!--") ||
-      token.startsWith("<![CDATA[") ||
-      token.startsWith("<?") ||
-      token.startsWith("<!DOCTYPE")
-    ) {
-      continue;
-    }
-    const parsed = /^<\s*(\/)?\s*([^\s/>]+)([^>]*)>$/.exec(token);
-    if (!parsed) continue;
-    const closing = Boolean(parsed[1]);
-    const name = parsed[2] ?? "";
-    const element = localName(name);
-    const attrSource = parsed[3] ?? "";
-    const selfClosing = /\/\s*$/.test(attrSource);
-    const allowed = ALLOWED_ELEMENTS.has(element);
-    if (closing) {
-      if (skip.length > 0 && skip[skip.length - 1] === element) skip.pop();
-      else if (skip.length === 0 && allowed) output += token;
-      continue;
-    }
-    if (skip.length > 0) {
-      if (!allowed && !selfClosing) skip.push(element);
-      continue;
-    }
-    if (!allowed) {
-      if (!selfClosing) skip.push(element);
-      continue;
-    }
-    const attrBody = selfClosing ? attrSource.replace(/\/\s*$/, "") : attrSource;
-    const attrs = parseAttributes(attrBody);
-    const kept = attrs.filter(
-      (attr) => attr.name && isAllowedAttr(element, attr.name) && attributeIsSafe(element, attr.name, attr.raw),
-    );
-    const dropResource =
-      RESOURCE_ELEMENTS.has(element) &&
-      attrs.some((attr) => URL_ATTRS.has(localName(attr.name))) &&
-      !kept.some((attr) => URL_ATTRS.has(localName(attr.name)));
-    if (dropResource) {
-      if (!selfClosing) skip.push(element);
-      continue;
-    }
-    if (kept.length === attrs.length) output += token;
-    else output += rebuildTag(name, kept, selfClosing);
+  if (!DOMPurify.isSupported) {
+    throw new Error("SVG 净化需要 DOM");
   }
-  if (skip.length === 0) output += input.slice(cursor);
-  return output;
+  installHooks();
+  return DOMPurify.sanitize(input, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    FORBID_TAGS: ["style", "script", "foreignObject", "iframe", "embed", "object", "handler", "animate", "set"],
+    ADD_ATTR: [
+      "data-pptx-object",
+      "data-pptx-source-ref",
+      "data-pptx-frame",
+      "data-pptx-prst",
+      "data-pptx-semantic-object",
+      "data-pptx-part",
+      "data-pptx-text-baseline",
+      "data-pptx-text-model",
+      "data-pptx-shape-id",
+      "data-pptx-shape-name",
+      "data-element",
+      "data-shape-id",
+      "data-name",
+    ],
+  });
 }
