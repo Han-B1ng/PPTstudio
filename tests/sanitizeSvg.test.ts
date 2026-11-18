@@ -73,6 +73,27 @@ describe("sanitizeSvg", () => {
     expect(doc.getElementById("mixed")?.getAttribute("style")).toBeNull();
     expect(doc.getElementById("unknown")?.getAttribute("style")).toBeNull();
     expect(doc.getElementById("external-style")?.getAttribute("style")).toBeNull();
+  });
+
+  it("drops external resource references on paint attributes and keeps in-deck gradients", () => {
+    const markup = `<svg xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g1"><stop offset="0" stop-color="#141414"/></linearGradient></defs>
+      <rect id="deck" fill="url(#g1)" stroke="none" marker-end="url(#arrow)"/>
+      <rect id="external" fill="url(https://evil.example/p.png)" stroke="url(https://evil.example/s.png)" clip-path="url(https://evil.example/c.svg)" mask="url(//evil.example/m)" filter="url(https://evil.example/f)" marker-start="url(https://evil.example/marker.svg)" marker-mid="url(https://evil.example/mid.svg)"/>
+      <rect id="named" fill="red"/>
+    </svg>`;
+    const doc = new DOMParser().parseFromString(sanitizeSvg(markup), "image/svg+xml");
+    const deck = doc.getElementById("deck");
+    expect(deck?.getAttribute("fill")).toBe("url(#g1)");
+    expect(deck?.getAttribute("stroke")).toBe("none");
+    expect(deck?.getAttribute("marker-end")).toMatch(/url\(#arrow\)/i);
+    expect(doc.querySelector("linearGradient")?.getAttribute("id")).toBe("g1");
+    const external = doc.getElementById("external");
+    for (const name of ["fill", "stroke", "clip-path", "mask", "filter", "marker-start", "marker-mid"]) {
+      expect(external?.getAttribute(name), name).toBeNull();
+    }
+    expect(doc.getElementById("named")?.getAttribute("fill")).toBeNull();
+    expect(sanitizeSvg(markup)).not.toContain("evil.example");
     expect(isAllowedImageReference("../images/../../etc/passwd.png")).toBe(false);
     expect(isAllowedImageReference("https://evil.example/a.png")).toBe(false);
     expect(isAllowedImageReference("../images/image1.png")).toBe(true);

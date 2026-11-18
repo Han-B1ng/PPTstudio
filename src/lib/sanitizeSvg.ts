@@ -11,8 +11,6 @@ import DOMPurify from "dompurify";
 const SAFE_IMAGE_DATA = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i;
 const SAFE_MEDIA_PATH = /^(?:\.\.\/)?images\/[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:png|jpe?g|gif|webp)$/;
 const SAFE_FRAGMENT = /^#[A-Za-z_][\w:.-]*$/;
-const URL_FUNCTION = /url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/gi;
-
 let hooksInstalled = false;
 
 function decodedPath(value: string): string | null {
@@ -65,15 +63,26 @@ const STYLE_VALUE: Record<string, RegExp> = {
   "clip-path": new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
   mask: new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
   filter: new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+  "marker-start": new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+  "marker-mid": new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
+  "marker-end": new RegExp(`^(?:none|${FRAGMENT_URL})$`, "i"),
 };
 
-function paintValueIsAllowed(value: string): boolean {
-  URL_FUNCTION.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = URL_FUNCTION.exec(value))) {
-    if (!SAFE_FRAGMENT.test((match[2] ?? "").trim().replace(/^['"]|['"]$/g, ""))) return false;
-  }
-  return !/expression\s*\(|javascript\s*:|@import|behavior\s*:|-moz-binding|<\/|[{}]/i.test(value);
+const RESOURCE_ATTRIBUTES = new Set([
+  "fill",
+  "stroke",
+  "clip-path",
+  "mask",
+  "filter",
+  "marker-start",
+  "marker-mid",
+  "marker-end",
+]);
+
+/** Same legal values as inline style: an ordinary paint, or url(#…). */
+function resourceAttributeIsAllowed(name: string, value: string): boolean {
+  const rule = STYLE_VALUE[name];
+  return Boolean(rule?.test(value.trim()));
 }
 
 function styleIsAllowlisted(value: string): boolean {
@@ -116,8 +125,8 @@ function installHooks(): void {
       if (!styleIsAllowlisted(data.attrValue)) data.keepAttr = false;
       return;
     }
-    if (name === "fill" || name === "stroke" || name === "clip-path" || name === "mask" || name === "filter") {
-      if (!paintValueIsAllowed(data.attrValue)) data.keepAttr = false;
+    if (RESOURCE_ATTRIBUTES.has(name) && !resourceAttributeIsAllowed(name, data.attrValue)) {
+      data.keepAttr = false;
     }
   });
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
