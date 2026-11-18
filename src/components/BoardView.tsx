@@ -1,5 +1,5 @@
 import { currentVersion } from "../lib/deckState";
-import { readTitleText } from "../lib/rewriteTitle";
+import { slideCaption } from "../lib/slideCaption";
 import { useStudio } from "../studio";
 import { SlideSvg } from "./SlideSvg";
 
@@ -10,12 +10,16 @@ export function BoardView() {
       <header className="view-head">
         <p className="eyebrow">Presentation Board</p>
         <h1>演示画板</h1>
-        <p className="lede">按页序看这三页短报。缩略图就是 SVG 本身。点一页进入工作区，不另开窗口。</p>
+        <p className="lede">
+          {studio.deck.kind === "pptx"
+            ? "缩略图来自 PPT-Master 的 flat authoring SVG。点一页进入工作区，再点文本框。"
+            : "按页序看这三页短报。缩略图就是 SVG 本身。点一页进入工作区，不另开窗口。"}
+        </p>
       </header>
       <ol className="board-list">
         {studio.deck.slides.map((slide) => {
           const svg = currentVersion(slide).svg;
-          const title = readTitleText(svg) ?? slide.fallbackTitle;
+          const title = slideCaption(slide, svg);
           const pending = studio.deck.candidate?.pageId === slide.id;
           return (
             <li key={slide.id} className={slide.id === studio.pageId ? "is-current" : ""}>
@@ -29,13 +33,18 @@ export function BoardView() {
                 data-testid={`thumb-${slide.page}`}
                 onClick={() => studio.openPage(slide.id)}
               >
-                <SlideSvg svg={svg} label={`第 ${slide.page} 页 ${title}`} testId={`thumb-svg-${slide.page}`} />
+                <SlideSvg
+                  svg={svg}
+                  label={`第 ${slide.page} 页 ${title}`}
+                  sanitize={studio.deck.kind === "pptx"}
+                  testId={`thumb-svg-${slide.page}`}
+                />
                 <span className="thumb-caption">
                   <span className="thumb-title" data-testid={`thumb-title-${slide.page}`}>
                     {title}
                   </span>
                   <span className="thumb-chips">
-                    <span className="chip">SVG</span>
+                    <span className="chip">{studio.deck.kind === "pptx" ? "PPTX" : "SVG"}</span>
                     <span className="chip" data-testid={`thumb-evidence-${slide.page}`}>
                       {slide.evidenceSummary}
                     </span>

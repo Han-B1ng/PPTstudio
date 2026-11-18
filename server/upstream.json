@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/hugohe3/ppt-master",
+  "commit": "3af3e8ef774c4d67ee57e1306d9256d08c9ee1bf",
+  "workflow": "skills/ppt-master/workflows/edit-native-pptx.md",
+  "import": "python3 skills/ppt-master/scripts/pptx_to_svg.py <source.pptx> -o <workspace> --inheritance-mode both --roundtrip",
+  "export": "python3 skills/ppt-master/scripts/svg_to_pptx.py <workspace> --roundtrip --primary-language zh-CN -o <out.pptx>"
+}

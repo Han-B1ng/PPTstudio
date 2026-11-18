@@ -178,6 +178,7 @@ function slide(input: {
     fallbackTitle: input.fallbackTitle,
     evidenceSummary: input.evidenceSummary,
     evidence: input.evidence,
+    objects: [],
     currentVersionId: `${input.id}-v1`,
     versions: [
       {
@@ -185,6 +186,7 @@ function slide(input: {
         label: "v1 · 原稿",
         svg: input.svg,
         note: "演示稿初始版本。",
+        pptxFile: null,
       },
     ],
   };
@@ -192,6 +194,9 @@ function slide(input: {
 
 export function createInitialDeck(): DeckModel {
   return {
+    kind: "svg-demo",
+    sessionId: null,
+    fileName: null,
     candidate: null,
     slides: [
       slide({

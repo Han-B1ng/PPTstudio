@@ -1,5 +1,8 @@
 import { currentVersion, slideById } from "../lib/deckState";
+import { downloadUrl } from "../lib/pptxApi";
+import { readShapeText } from "../lib/replaceShapeText";
 import { readTitleText } from "../lib/rewriteTitle";
+import { slideCaption } from "../lib/slideCaption";
 import { useStudio } from "../studio";
 import type { EvidenceRecord, TabId } from "../types";
 
@@ -13,14 +16,26 @@ export function Sidebar() {
   const studio = useStudio();
   const page = slideById(studio.deck, studio.pageId);
   const version = currentVersion(page);
-  const title = readTitleText(version.svg) ?? page.fallbackTitle;
+  const native = studio.deck.kind === "pptx";
+  const selected = studio.selected;
+  const selectedShape =
+    selected?.kind === "shape"
+      ? page.objects.find((item) => item.shapeId === selected.shapeId) ?? null
+      : null;
+  const selectedText = selectedShape ? readShapeText(version.svg, selectedShape.shapeId) : null;
+  const title = native
+    ? selectedText ?? slideCaption(page, version.svg)
+    : readTitleText(version.svg) ?? page.fallbackTitle;
   const candidate = studio.deck.candidate?.pageId === page.id ? studio.deck.candidate : null;
-  const sameTitle = titleDraftEquals(studio.titleDraft, title);
+  const comparisonText = native ? selectedText ?? "" : title;
+  const sameTitle = titleDraftEquals(studio.titleDraft, comparisonText);
   const canEdit =
-    studio.selected === "title" &&
+    !studio.busy &&
     studio.titleDraft.trim().length > 0 &&
     !sameTitle &&
-    !studio.inspectVersionId;
+    !studio.inspectVersionId &&
+    (native ? studio.selected?.kind === "shape" : studio.selected?.kind === "title");
+  const selection = selectionLabel(studio.selected, selectedShape?.name ?? null);
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -30,9 +45,7 @@ export function Sidebar() {
         <p className="context-title" data-testid="context-title">
           {title}
         </p>
-        <p data-testid="context-selection">
-          {studio.selected === "title" ? "选中元素 · 标题" : "选中元素 · 未选中"}
-        </p>
+        <p data-testid="context-selection">{selection}</p>
       </div>
       <div className="side-tabs" role="tablist" aria-label="侧栏">
         {TABS.map((item) => (
@@ -69,17 +82,17 @@ export function Sidebar() {
                 studio.localEdit();
               }}
             >
-              <label htmlFor="title-draft">新标题</label>
+              <label htmlFor="title-draft">{native ? "新文字" : "新标题"}</label>
               <input
                 id="title-draft"
                 data-testid="title-input"
                 value={studio.titleDraft}
-                maxLength={28}
-                placeholder="输入替换后的标题"
+                maxLength={native ? 80 : 28}
+                placeholder={native ? "输入替换后的文字" : "输入替换后的标题"}
                 onChange={(event) => studio.setTitleDraft(event.target.value)}
               />
               <button type="submit" className="btn-primary" data-testid="local-edit" disabled={!canEdit}>
-                局部修改
+                {studio.busy === "preview" ? "正在生成候选…" : "局部修改"}
               </button>
               <button type="button" className="path-btn" disabled>
                 整页重生成
@@ -95,28 +108,34 @@ export function Sidebar() {
 
         {studio.tab === "evidence" ? (
           <div className="evidence-panel" data-testid="evidence-panel">
-            <p className="panel-lead">只列出这一页的样本记录。没有来源的条目写明未知，不补一条假出处。</p>
-            <ul className="record-list">
-              {page.evidence.map((record) => (
-                <li key={record.id}>
-                  <button
-                    type="button"
-                    className={studio.openEvidenceId === record.id ? "is-open" : ""}
-                    data-testid={`evidence-${record.id}`}
-                    onClick={() =>
-                      studio.setOpenEvidenceId(studio.openEvidenceId === record.id ? null : record.id)
-                    }
-                  >
-                    <Grade grade={record.grade} />
-                    <span>
-                      <strong>{record.title}</strong>
-                      <small>{record.kind}</small>
-                    </span>
-                  </button>
-                  {studio.openEvidenceId === record.id ? <EvidenceBody record={record} /> : null}
-                </li>
-              ))}
-            </ul>
+            {page.evidence.length === 0 ? (
+              <p className="panel-lead">这份导入的 PPTX 没有附带依据。这里不补写来源。</p>
+            ) : (
+              <>
+                <p className="panel-lead">只列出这一页的样本记录。没有来源的条目写明未知，不补一条假出处。</p>
+                <ul className="record-list">
+                  {page.evidence.map((record) => (
+                    <li key={record.id}>
+                      <button
+                        type="button"
+                        className={studio.openEvidenceId === record.id ? "is-open" : ""}
+                        data-testid={`evidence-${record.id}`}
+                        onClick={() =>
+                          studio.setOpenEvidenceId(studio.openEvidenceId === record.id ? null : record.id)
+                        }
+                      >
+                        <Grade grade={record.grade} />
+                        <span>
+                          <strong>{record.title}</strong>
+                          <small>{record.kind}</small>
+                        </span>
+                      </button>
+                      {studio.openEvidenceId === record.id ? <EvidenceBody record={record} /> : null}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -126,14 +145,16 @@ export function Sidebar() {
               <section className="pending-card">
                 <p className="eyebrow">待确认</p>
                 <p>
-                  标题将改为「{candidate.title}」。当前版本仍是「{title}」。
+                  {candidate.shapeId
+                    ? `形状 ${candidate.shapeId} 的文字将改为「${candidate.title}」。当前版本仍是「${selectedText ?? title}」。`
+                    : `标题将改为「${candidate.title}」。当前版本仍是「${title}」。`}
                 </p>
                 <div className="decision">
-                  <button type="button" className="btn-ghost" onClick={studio.reject}>
+                  <button type="button" className="btn-ghost" onClick={studio.reject} disabled={studio.busy !== null}>
                     退回
                   </button>
-                  <button type="button" className="btn-primary" onClick={studio.accept}>
-                    采纳
+                  <button type="button" className="btn-primary" onClick={studio.accept} disabled={studio.busy !== null}>
+                    {studio.busy === "export" ? "正在导出…" : "采纳"}
                   </button>
                 </div>
               </section>
@@ -145,6 +166,10 @@ export function Sidebar() {
               {[...page.versions].reverse().map((item) => {
                 const active = item.id === version.id;
                 const inspecting = item.id === studio.inspectVersionId;
+                const href =
+                  item.pptxFile && studio.deck.sessionId
+                    ? downloadUrl(studio.deck.sessionId, item.pptxFile)
+                    : null;
                 return (
                   <li key={item.id}>
                     <button
@@ -159,6 +184,15 @@ export function Sidebar() {
                       </span>
                       <em>{active ? "当前" : inspecting ? "回看中" : "打开"}</em>
                     </button>
+                    {href ? (
+                      <a
+                        className="text-link"
+                        href={href}
+                        data-testid={`download-${item.id}`}
+                      >
+                        {item.pptxFile === "original" ? "下载原稿 PPTX" : "下载这一版 PPTX"}
+                      </a>
+                    ) : null}
                   </li>
                 );
               })}
@@ -168,6 +202,14 @@ export function Sidebar() {
       </div>
     </aside>
   );
+}
+
+function selectionLabel(selected: { kind: "title" } | { kind: "shape"; shapeId: string } | null, name: string | null): string {
+  if (selected?.kind === "title") return "选中元素 · 标题";
+  if (selected?.kind === "shape") {
+    return `选中元素 · 形状 ${selected.shapeId}${name ? ` · ${name}` : ""}`;
+  }
+  return "选中元素 · 未选中";
 }
 
 function titleDraftEquals(draft: string, title: string): boolean {

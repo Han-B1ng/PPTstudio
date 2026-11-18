@@ -681,7 +681,13 @@ input:focus-visible {
   height: auto;
 }
 
-.slide-frame.is-interactive [data-element="title-hit"] {
+.slide-svg text,
+.slide-svg tspan {
+  font-family: "WenQuanYi Micro Hei", "Microsoft YaHei", sans-serif;
+}
+
+.slide-frame.is-interactive [data-element="title-hit"],
+.slide-frame.is-interactive [data-element="shape-hit"] {
   cursor: pointer;
 }
 
@@ -763,6 +769,86 @@ input:focus-visible {
 .status-line,
 .stage-hint {
   margin-top: 10px;
+}
+
+.source-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-switch button,
+.file-btn,
+.download-link,
+.text-link {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  height: 32px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+}
+
+.file-btn {
+  position: relative;
+  cursor: pointer;
+}
+
+.file-btn input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-btn.is-disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.download-link.btn-primary {
+  border-color: var(--text);
+}
+
+.text-link {
+  margin-top: 6px;
+  height: auto;
+  padding: 6px 10px;
+}
+
+.error-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 16px;
+  background: #3a1612;
+  color: #fcfcfc;
+  border-bottom: 1px solid rgba(252, 252, 252, 0.16);
+}
+
+.app[data-theme="light"] .error-banner {
+  background: #f3d6d0;
+  color: #141414;
+}
+
+.error-banner pre {
+  margin: 0;
+  flex: 1;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 12px/1.45 var(--mono);
+}
+
+.error-banner button {
+  flex: none;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid currentColor;
+  background: transparent;
 }
 
 @media (max-width: 1100px) {
